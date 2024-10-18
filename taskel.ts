@@ -1,88 +1,180 @@
+import { toPathString } from "https://deno.land/std@0.195.0/fs/_util.ts";
 import { walkSync } from "https://deno.land/std@0.195.0/fs/mod.ts";
-import { sprintf } from "https://deno.land/std@0.195.0/fmt/printf.ts";
 import dayjs, { Dayjs } from "npm:dayjs@1.11.7";
 
-const vaultPath = (
-    Deno.env.get('HOME') +
-    "/Work"
-    // "/Library/Mobile Documents/iCloud~com~logseq~logseq/Documents/Main"
-);
+const vaultPath = Deno.env.get("HOME") + "/Work";
+// "/Library/Mobile Documents/iCloud~com~logseq~logseq/Documents/Main"
 
 //const projects: {string: dayjs} = {};
 
 class Task {
-    name: string;
-    startTime: Dayjs;
+    file: string = "";
+    name: string = "";
+    remain: number = 2;
+    scheduleTime: Dayjs | undefined;
+    startTime: Dayjs | undefined;
+    endTime: Dayjs | undefined;
 
-    constructor(name: string, startTime: Dayjs) {
-        this.name = name;
-        this.startTime = startTime.clone();
+    constructor(obj: Partial<Task>) {
+        Object.assign(this, obj);
     }
 
-    static parse(line: string, startTime: Dayjs): Task | null {
-        // const result = line.match(/\- (TODO|DOING) (.*)$/);
-        const result = line.match(/^- \[ \] (.*)$/);
-        if (!result) return null;
-        return new Task(result[1], startTime)
+    get note(): string {
+        return this.file.replace(/\.md$/, "");
     }
 
-    print() {
-        return sprintf(
-            "%s %s \n",
-            this.startTime.format("MM/DD ddd HH:mm"),
-            this.name,
-        )
+    get scheduleTimeOrNow(): Dayjs {
+        if (this.scheduleTime && this.scheduleTime.isAfter(dayjs())) {
+            return this.scheduleTime;
+        }
+        return dayjs();
+    }
+
+    complete(time: Dayjs) {
+        const hours = 1;
+        this.startTime = time;
+        this.endTime = time.add(hours, "hour");
     }
 }
 
-function getNextStarTime(t: Dayjs) {
-    t = t.add(1, 'hour')
-    if (t.hour() < 18 || t.hour() >= 22) {
-        t = t.hour(18);
-        t = t.add(1, 'day')
+class TaskRepo {
+    tasks: Task[] = [];
+
+    constructor() {}
+
+    add(task: Task) {
+        this.tasks.push(task);
+    }
+
+    delete(task: Task) {
+        this.tasks = this.tasks.filter((t) => t !== task);
+    }
+
+    collectFromMarkdown() {
+        const walkSyncOpt = {
+            includeDirs: false,
+            exts: [".md"],
+            skip: [/logseq/],
+        };
+
+        for (const file of walkSync(vaultPath, walkSyncOpt)) {
+            // create tasks
+            for (const line of Deno.readTextFileSync(file.path).split(/\n/)) {
+                const match = line.match(/\- \[ \] (.*)$/);
+                if (!match) continue;
+                const [, name] = match;
+                const [, scheduled] = line.match(/[⏳🛫]\s*([-\d]+)/) || [];
+                const [, remain] = line.match(/⏲️\s*(\d+)/) || [];
+
+                const task = new Task({
+                    file: file.name,
+                    name: name,
+                    scheduleTime: scheduled ? dayjs(scheduled) : undefined,
+                    remain: remain ? parseInt(remain) : 1,
+                });
+
+                this.add(task);
+            }
+        }
+    }
+
+    execute() {
+        let clock = dayjs();
+
+        let task;
+
+        while ((task = this.getTopTask())) {
+            console.log({
+                clock: clock.format("DD/MMM ddd HH:mm"),
+                taskName: task.name,
+                taskRemain: task.remain,
+                taskStartTime: task.startTime?.format("DD/MMM ddd HH:mm"),
+                taskEndTime: task.endTime?.format("DD/MMM ddd HH:mm"),
+            });
+
+            task.complete(clock);
+
+            // create next task
+            const hours = 1;
+            const remain = task.remain - hours;
+            clock = proceedClock(clock, hours);
+
+            if (remain > 0) {
+                const nextTask = new Task({
+                    name: task.name,
+                    file: task.file,
+                    remain,
+                    scheduleTime: clock,
+                    startTime: undefined,
+                    endTime: undefined,
+                });
+                this.add(nextTask);
+            }
+        }
+    }
+
+    getReport(): string {
+        let report = "";
+        report += "|scheduled|start|note|description|remain|\n";
+        report += "|---|---|---|---|---|\n";
+
+        const tasks = this.tasks.toSorted((a, b) =>
+            a.startTime?.isBefore(b.startTime) ? -1 : 1
+        );
+
+        for (const task of tasks) {
+            const scheduledTime =
+                task.scheduleTime?.format("DD/MMM ddd HH:mm") || "";
+            const note = task.note.replaceAll(/\|/g, "");
+            const startTime = task.startTime?.format("DD/MMM HH:mm") || "";
+            const endTime = task.endTime?.format("DD/MMM HH:mm") || "";
+
+            const line =
+                `|${scheduledTime}|${startTime}|[[${note}]]|${task.name}|${task.remain}|\n`;
+            report += line;
+        }
+
+        return report;
+    }
+
+    getTopTask(): Task | undefined {
+        const remainingTasks = this.tasks.filter((t) => !t.startTime);
+        if (remainingTasks.length === 0) return undefined;
+        let topTask: Task = remainingTasks[0];
+        for (const task of remainingTasks) {
+            if (task.scheduleTimeOrNow.isBefore(task.scheduleTimeOrNow)) {
+                topTask = task;
+            }
+        }
+        return topTask;
+    }
+}
+
+function proceedClock(t: Dayjs, hours: number): Dayjs {
+    t = t.add(hours, "hour");
+    if (t.hour() < 9 || t.hour() >= 17) {
+        t = t.hour(9);
+        t = t.add(1, "day");
     }
     return t;
 }
 
 // main
 function main() {
-    const tasks: Task[] = [];
+    const taskRepo = new TaskRepo();
 
-    const walkSyncOpt = {
-        includeDirs: false,
-        exts: ['.md'],
-        skip: [
-            /2022.+\dZ\.md$/,
-            /Main\/logseq/
-        ]
-    };
+    taskRepo.collectFromMarkdown();
 
-    let startTime = dayjs();
+    taskRepo.execute();
 
-    for (const file of walkSync(vaultPath, walkSyncOpt)) {
+    const report = taskRepo.getReport();
 
-        // create tasks
-        for (const line of Deno.readTextFileSync(file.path).split(/\n/)) {
-            const task = Task.parse(line, startTime.clone());
-            if (!task) continue;
-            tasks.push(task);
-            startTime = getNextStarTime(startTime);
-        }
-    }
-
-    // sort by interval in ascending order
-    // tasks.sort((a, b) => a.interval - b.interval)
-
-    // create report
-    let report = "";
-    for (const task of tasks) {
-        report += task.print();
-    }
-
+    // display report
     console.clear();
     console.log(report);
-    Deno.writeTextFileSync(vaultPath + "/pages/taskette.md", report)
+
+    // write report to file
+    Deno.writeTextFileSync(vaultPath + "/pages/taskette.md", report);
 }
 
-main()
-
+main();

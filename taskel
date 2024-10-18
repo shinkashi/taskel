@@ -1,4 +1,3 @@
 #!/bin/bash
 
-cd ~/tools/taskel
 deno run --watch -A taskel.ts

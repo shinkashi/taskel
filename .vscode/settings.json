@@ -1,3 +1,5 @@
 {
-    "git.autofetch": true
+    "git.autofetch": true,
+    "deno.enable": true,
+    "editor.formatOnSave": true
 }
