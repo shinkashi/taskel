@@ -1,17 +1,14 @@
-import { toPathString } from "https://deno.land/std@0.195.0/fs/_util.ts";
 import { walkSync } from "https://deno.land/std@0.195.0/fs/mod.ts";
 import dayjs, { Dayjs } from "npm:dayjs@1.11.7";
 
 const vaultPath = Deno.env.get("HOME") + "/Work";
 // "/Library/Mobile Documents/iCloud~com~logseq~logseq/Documents/Main"
 
-//const projects: {string: dayjs} = {};
-
 class Task {
     file: string = "";
     name: string = "";
     remain: number = 2;
-    scheduleTime: Dayjs | undefined;
+    scheduleTime: Dayjs = dayjs();
     startTime: Dayjs | undefined;
     endTime: Dayjs | undefined;
 
@@ -21,13 +18,6 @@ class Task {
 
     get note(): string {
         return this.file.replace(/\.md$/, "");
-    }
-
-    get scheduleTimeOrNow(): Dayjs {
-        if (this.scheduleTime && this.scheduleTime.isAfter(dayjs())) {
-            return this.scheduleTime;
-        }
-        return dayjs();
     }
 
     complete(time: Dayjs) {
@@ -69,7 +59,7 @@ class TaskRepo {
                 const task = new Task({
                     file: file.name,
                     name: name,
-                    scheduleTime: scheduled ? dayjs(scheduled) : undefined,
+                    scheduleTime: scheduled ? dayjs(scheduled) : dayjs(),
                     remain: remain ? parseInt(remain) : 1,
                 });
 
@@ -104,7 +94,7 @@ class TaskRepo {
                     name: task.name,
                     file: task.file,
                     remain,
-                    scheduleTime: clock,
+                    scheduleTime: clock.add(1, "day"),
                     startTime: undefined,
                     endTime: undefined,
                 });
@@ -114,8 +104,19 @@ class TaskRepo {
     }
 
     getReport(): string {
+        const wikiLinkDate = (d: Dayjs | undefined): string => {
+            const nonBreakingSpace = "\u00A0";
+
+            if (d) {
+                return `[[${d.format("YYYY-MM-DD")}]]${nonBreakingSpace}${
+                    d.format("HH:mm")
+                }`;
+            }
+            return "";
+        };
+
         let report = "";
-        report += "|scheduled|start|note|description|remain|\n";
+        report += "|start|scheduled|note|description|remain|\n";
         report += "|---|---|---|---|---|\n";
 
         const tasks = this.tasks.toSorted((a, b) =>
@@ -123,14 +124,13 @@ class TaskRepo {
         );
 
         for (const task of tasks) {
-            const scheduledTime =
-                task.scheduleTime?.format("DD/MMM ddd HH:mm") || "";
+            const scheduledTime = wikiLinkDate(task.scheduleTime);
             const note = task.note.replaceAll(/\|/g, "");
-            const startTime = task.startTime?.format("DD/MMM HH:mm") || "";
-            const endTime = task.endTime?.format("DD/MMM HH:mm") || "";
+            const startTime = wikiLinkDate(task.startTime);
+            // const endTime = task.endTime?.format("DD/MMM HH:mm") || "";
 
             const line =
-                `|${scheduledTime}|${startTime}|[[${note}]]|${task.name}|${task.remain}|\n`;
+                `|${startTime}|${scheduledTime}|[[${note}]]|${task.name}|${task.remain}|\n`;
             report += line;
         }
 
@@ -142,7 +142,7 @@ class TaskRepo {
         if (remainingTasks.length === 0) return undefined;
         let topTask: Task = remainingTasks[0];
         for (const task of remainingTasks) {
-            if (task.scheduleTimeOrNow.isBefore(task.scheduleTimeOrNow)) {
+            if (task.scheduleTime.isBefore(topTask.scheduleTime)) {
                 topTask = task;
             }
         }
@@ -152,9 +152,15 @@ class TaskRepo {
 
 function proceedClock(t: Dayjs, hours: number): Dayjs {
     t = t.add(hours, "hour");
-    if (t.hour() < 9 || t.hour() >= 17) {
-        t = t.hour(9);
+    if (t.hour() < 10 || t.hour() >= 15) {
+        t = t.hour(10);
         t = t.add(1, "day");
+    }
+    if (t.day() === 0) {
+        t = t.add(1, "day");
+    }
+    if (t.day() === 6) {
+        t = t.add(2, "day");
     }
     return t;
 }
